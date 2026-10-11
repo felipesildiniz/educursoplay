@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#141414">
+<title>ENEM Play — Aulas em vídeo para o ENEM</title>
+<meta name="description" content="Todas as matérias do ENEM em vídeo. Estude no seu ritmo.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23e50914'/><path d='M38 28l34 22-34 22z' fill='white'/></svg>">
+</head>
+<body class="carregando">
+
+<!-- ============ TELA DE LOGIN ============ -->
+<div class="login-overlay" id="login-overlay">
+  <div class="login-bg"></div>
+  <div class="login-card">
+    <div class="login-logo">ENEM<em>PLAY</em></div>
+    <h1 class="login-titulo">Entrar</h1>
+    <form id="login-form" autocomplete="on">
+      <div class="login-campo">
+        <input type="email" id="login-email" placeholder="E-mail" required autocomplete="email">
+      </div>
+      <div class="login-campo">
+        <input type="password" id="login-senha" placeholder="Senha" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="login-btn" id="login-btn">Entrar</button>
+      <div class="login-erro" id="login-erro" role="alert"></div>
+    </form>
+    <p class="login-dica">Acesso restrito. Solicite suas credenciais ao administrador do curso.</p>
+  </div>
+</div>
+<!-- ... dentro do <body>, junto aos outros overlays ... -->
+
+<!-- ============ AVISO DE SESSÃO EM OUTRO DISPOSITIVO ============ -->
+<div class="blocked-overlay" id="blocked-overlay">
+  <div class="blocked-card">
+    <div class="blocked-ico">
+      <svg viewBox="0 0 24 24" fill="none">
+        <path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h2 class="blocked-titulo">Sua conta está em uso</h2>
+    <p class="blocked-msg">
+      Detectamos que alguém entrou com esta conta em <strong>outro dispositivo</strong>.
+      Por segurança, esta sessão foi encerrada.
+    </p>
+    <p class="blocked-dica">
+      Se foi você, clique em <strong>"Entrar novamente"</strong>. Isso encerrará a sessão do outro dispositivo.
+      Se você compartilha seu login, pare: sua conta será desconectada a cada acesso do outro.
+    </p>
+    <button class="login-btn" id="btn-reentrar" type="button">Entrar novamente</button>
+  </div>
+</div>
+<!-- ============ SPINNER INICIAL ============ -->
+<div class="loading-overlay" id="loading-overlay">
+  <div class="spinner"></div>
+  <p>Carregando…</p>
+</div>
+
+<!-- ============ HEADER ============ -->
+<header class="nav-topo" id="nav-topo">
+  <div class="nav-topo__inner">
+    <a href="#/" class="logo" aria-label="ENEM Play — início">
+      <span class="logo__txt">ENEM<em>PLAY</em></span>
+    </a>
+
+    <nav class="menu" aria-label="Navegação principal">
+      <a href="#/" data-rota="">Início</a>
+      <a href="#/cursos" data-rota="cursos">Cursos</a>
+    </nav>
+
+    <div class="nav-topo__direita">
+      <form class="busca-topo" id="form-busca" role="search">
+        <button type="submit" class="busca-topo__btn" aria-label="Buscar">
+          <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M20 20l-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <input type="search" id="campo-busca" placeholder="Buscar aulas, matérias…" autocomplete="off" aria-label="Buscar aulas ou matérias">
+      </form>
+
+      <div class="perfil" id="perfil">
+        <span class="perfil__avatar" id="perfil-avatar">?</span>
+        <div class="perfil__menu" id="perfil-menu">
+          <div class="perfil__email" id="perfil-email">—</div>
+          <button id="btn-logout" type="button">
+            <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M15 4h3a2 2 0 012 2v12a2 2 0 01-2 2h-3M10 17l5-5-5-5M15 12H3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Sair
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ============ CONTEÚDO ============ -->
+<main id="app" tabindex="-1"></main>
+
+<!-- ============ RODAPÉ ============ -->
+<footer class="rodape">
+  <div class="rodape__inner">
+    <div class="rodape__cols">
+      <div>
+        <h4>Matérias</h4>
+        <ul id="rodape-cursos"></ul>
+      </div>
+      <div>
+        <h4>Navegação</h4>
+        <ul>
+          <li><a href="#/">Início</a></li>
+          <li><a href="#/cursos">Todos os cursos</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Estude</h4>
+        <ul>
+          <li><a href="#/cursos">Ver matérias</a></li>
+          <li><a href="#/">Continuar de onde parei</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>ENEM Play</h4>
+        <ul>
+          <li><a href="#/">Aulas em vídeo</a></li>
+          <li><a href="#/cursos">Materiais para download</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="rodape__base">© <span id="ano"></span> ENEM Play · Seu progresso fica salvo na sua conta.</p>
+  </div>
+</footer>
+
+<!-- Firebase SDK (compat) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<script src="dados.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
