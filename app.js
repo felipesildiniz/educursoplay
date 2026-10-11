@@ -1,6 +1,5 @@
 /* =========================================================================
-   ENEM Play — app.js
-   (login + sessão única + temporadas + materiais + player custom)
+   ENEM Play — app.js (correção de áudio)
    ========================================================================= */
 
 const $app = document.getElementById('app');
@@ -33,18 +32,15 @@ try {
 /* =========================================================================
    ESTADO
    ========================================================================= */
-let progresso = {};   // { cursoId: { "t_a": true } }
-let ultimo    = {};   // { cursoId: "t_a" }
-let videoPos  = {};   // { cursoId: { "t_a": { t: seconds, d: duration } } }
+let progresso = {};
+let ultimo    = {};
+let videoPos  = {};
 let atual     = { cursoId: null, tIdx: 0, aIdx: 0 };
 
-/* Sessão */
 let sessionId = null, sessionUnsub = null, isBlocked = false;
 
-/* Player */
 let hlsInstance = null;
 let currentVideo = null;
-let currentHls = null;
 let hideControlsTimer = null;
 let ultimoSalvamentoVideo = 0;
 
@@ -195,7 +191,6 @@ function salvarProgresso(imediato = false){
   else saveTimer = setTimeout(doSave, 800);
 }
 
-/* Posição do vídeo */
 function posicaoSalva(cursoId, tIdx, aIdx){
   const ch = chaveAula(tIdx, aIdx);
   return (videoPos[cursoId] && videoPos[cursoId][ch]) || null;
@@ -207,7 +202,6 @@ function salvarPosicaoVideo(){
   const d = currentVideo.duration;
   if (!isFinite(t) || !isFinite(d) || d <= 0) return;
 
-  // Se faltar menos de 10s para acabar, considera como "assistido" (volta do início)
   const tSalvar = (t >= d - 10) ? 0 : t;
 
   if (!videoPos[cursoId]) videoPos[cursoId] = {};
@@ -319,7 +313,7 @@ if (auth){
 }
 
 /* =========================================================================
-   HLS.JS — carregamento sob demanda
+   HLS.JS
    ========================================================================= */
 function carregarHlsLib(){
   if (window.Hls) return Promise.resolve(window.Hls);
@@ -371,8 +365,10 @@ function playerHtml(aula){
   }
 
   if (emb.tipo === 'hls' || emb.tipo === 'video'){
+    /* IMPORTANTE: SEM crossorigin="anonymous" — o hls.js cuida do CORS
+       e o atributo quebra o áudio em CDNs que não retornam os headers. */
     return `
-      <video id="video-el" playsinline preload="metadata" crossorigin="anonymous"></video>
+      <video id="video-el" playsinline preload="metadata"></video>
 
       <div class="player__center">
         <button class="player__center-btn" id="pc-center-play" aria-label="Reproduzir">
@@ -434,7 +430,6 @@ function playerHtml(aula){
 function destruirPlayer(){
   clearTimeout(hideControlsTimer);
   if (hlsInstance){ try{ hlsInstance.destroy(); }catch{} hlsInstance = null; }
-  currentHls = null;
   currentVideo = null;
 }
 
@@ -453,12 +448,18 @@ function iniciarPlayer(aula){
   destruirPlayer();
 
   const video = wrap.querySelector('#video-el');
-  if (!video) return; // iframe ou vazio
+  if (!video) return;
 
   const link = construirLink(aula);
   if (!link) return;
 
   currentVideo = video;
+
+  /* ---- Garantir que o vídeo não inicia mudo ---- */
+  video.muted = false;
+  video.defaultMuted = false;
+  video.removeAttribute('muted');
+
   const { cursoId, tIdx, aIdx } = atual;
   const emb = embedDoLink(link);
 
@@ -476,11 +477,14 @@ function iniciarPlayer(aula){
           backBufferLength: 60,
           maxBufferLength: 30
         });
-        currentHls = hlsInstance;
         hlsInstance.loadSource(link);
         hlsInstance.attachMedia(video);
 
         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+          // Se houver múltiplas faixas de áudio, seleciona a primeira
+          if (hlsInstance.audioTracks && hlsInstance.audioTracks.length > 0){
+            hlsInstance.audioTrack = 0;
+          }
           popularMenuQualidade(hlsInstance);
         });
         hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (e, data) => {
@@ -501,28 +505,22 @@ function iniciarPlayer(aula){
   }
 
   /* ---- Volume inicial ---- */
-  const volSalvo = Number(localStorage.getItem('enemplay:volume'));
-  if (isFinite(volSalvo) && volSalvo >= 0 && volSalvo <= 1){
-    video.volume = volSalvo;
-  } else {
-    video.volume = 1;
-  }
+  let volSalvo = Number(localStorage.getItem('enemplay:volume'));
+  if (!isFinite(volSalvo) || volSalvo <= 0) volSalvo = 1;
+  video.volume = volSalvo;
+  video.muted = false;
 
   /* ---- Restaurar posição ---- */
-  let restaurouPosicao = false;
   video.addEventListener('loadedmetadata', () => {
     const pos = posicaoSalva(cursoId, tIdx, aIdx);
     if (pos && pos.t > 5 && video.duration && pos.t < video.duration - 5){
       video.currentTime = pos.t;
-      restaurouPosicao = true;
       mostrarToast(`▶ Retomando de ${formatarTempo(pos.t)}`);
-    } else if (pos && pos.t === 0 && pos.d > 0){
-      // Já assistiu; começa do zero silenciosamente
     }
     atualizarTempo(video);
   }, { once: true });
 
-  /* ---- Eventos do vídeo ---- */
+  /* ---- Eventos ---- */
   video.addEventListener('play', () => {
     wrap.classList.remove('pausado');
     sincronizarBotaoPlay(true);
@@ -549,10 +547,8 @@ function iniciarPlayer(aula){
   });
   video.addEventListener('volumechange', () => atualizarIconeVolume(video));
 
-  /* ---- Controles custom ---- */
   setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx);
 
-  /* ---- Estado inicial ---- */
   if (video.paused) wrap.classList.add('pausado');
 }
 
@@ -568,11 +564,9 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
   const qualBox  = document.getElementById('pc-qualidade');
   const qualBtn  = document.getElementById('pc-qual-btn');
   const qualMenu = document.getElementById('pc-qual-menu');
-  const toastEl  = document.getElementById('pc-toast');
 
   if (!pcWrap) return;
 
-  /* Play / Pause */
   const togglePlay = () => {
     if (video.paused || video.ended) video.play().catch(()=>{});
     else video.pause();
@@ -580,7 +574,6 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
   btnPlay?.addEventListener('click', togglePlay);
   btnCenter?.addEventListener('click', togglePlay);
 
-  /* Clique no vídeo = toggle */
   video.addEventListener('click', togglePlay);
   video.addEventListener('dblclick', alternarFullscreen);
 
@@ -591,6 +584,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
       video.volume = Number(rangeVol.value);
       video.muted = video.volume === 0;
       try { localStorage.setItem('enemplay:volume', String(video.volume)); } catch {}
+      atualizarIconeVolume(video);
     });
   }
   btnMute?.addEventListener('click', () => {
@@ -600,6 +594,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     } else {
       video.muted = true;
     }
+    atualizarIconeVolume(video);
   });
 
   /* Fullscreen */
@@ -615,7 +610,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
   }
   btnFull?.addEventListener('click', alternarFullscreen);
 
-  /* Barra de progresso — seek */
+  /* Barra */
   if (barra){
     const buscarPos = (clientX) => {
       const rect = barra.getBoundingClientRect();
@@ -633,7 +628,6 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     };
     const onMove = (e) => {
       const clientX = e.touches ? (e.touches[0]?.clientX ?? 0) : e.clientX;
-      // Tooltip sempre
       const rect = barra.getBoundingClientRect();
       const pct  = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       const tip  = document.getElementById('pc-tip');
@@ -658,7 +652,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     document.addEventListener('touchend', onUp);
   }
 
-  /* Menu de qualidade — abrir/fechar */
+  /* Menu de qualidade */
   qualBtn?.addEventListener('click', (e) => {
     e.stopPropagation();
     qualBox.classList.toggle('aberto');
@@ -675,7 +669,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     qualBox.classList.remove('aberto');
   });
 
-  /* Esconder controles após inatividade */
+  /* Esconder controles */
   const mostrarControles = () => {
     wrap.classList.add('controles-visiveis');
     wrap.classList.remove('ocultar-cursor');
@@ -696,7 +690,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     }
   });
 
-  /* Atalhos de teclado */
+  /* Atalhos */
   const onKey = (e) => {
     if (!document.body.contains(wrap)) return;
     if (e.target.matches('input, textarea')) return;
@@ -708,23 +702,17 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
       case 'ArrowUp':    video.volume = Math.min(1, video.volume + 0.1); break;
       case 'ArrowDown':  video.volume = Math.max(0, video.volume - 0.1); break;
       case 'f':          alternarFullscreen(); break;
-      case 'm':          video.muted = !video.muted; break;
+      case 'm':          video.muted = !video.muted; atualizarIconeVolume(video); break;
     }
   };
   document.addEventListener('keydown', onKey);
-  wrap._cleanupKeys = () => document.removeEventListener('keydown', onKey);
 
-  /* Salvar ao esconder a aba */
   const onVis = () => { if (document.hidden) salvarPosicaoVideo(); };
   document.addEventListener('visibilitychange', onVis);
-  wrap._cleanupVis = () => document.removeEventListener('visibilitychange', onVis);
 
-  /* Salvar ao sair */
   const onBeforeUnload = () => { salvarPosicaoVideo(); salvarProgresso(true); };
   window.addEventListener('beforeunload', onBeforeUnload);
-  wrap._cleanupUnload = () => window.removeEventListener('beforeunload', onBeforeUnload);
 
-  /* Estado inicial do botão */
   sincronizarBotaoPlay(!video.paused);
   atualizarIconeVolume(video);
 }
@@ -768,7 +756,6 @@ function atualizarBarra(video){
 function atualizarBuffer(video){
   const buf = document.getElementById('pc-buf');
   if (!buf || !video.buffered.length || !isFinite(video.duration) || video.duration <= 0) return;
-  // Último trecho em buffer a partir da posição atual
   let end = 0;
   for (let i = 0; i < video.buffered.length; i++){
     if (video.buffered.start(i) <= video.currentTime && video.buffered.end(i) >= video.currentTime){
@@ -779,7 +766,6 @@ function atualizarBuffer(video){
   buf.style.width = ((end / video.duration) * 100) + '%';
 }
 
-/* ---------- Menu de qualidade (HLS) ---------- */
 function popularMenuQualidade(hls){
   const box  = document.getElementById('pc-qualidade');
   const btn  = document.getElementById('pc-qual-btn');
@@ -1250,7 +1236,6 @@ function alternarConclusao(){
   const agoraFeita = !progresso[curso.id][chave];
   if (agoraFeita){
     progresso[curso.id][chave] = true;
-    // Marcar como concluída: zera a posição do vídeo
     limparPosicaoVideo(curso.id, tIdx, aIdx);
   } else {
     delete progresso[curso.id][chave];
@@ -1293,7 +1278,6 @@ function irParaAula(delta){
 function rotear(){
   if (!currentUser || isBlocked) return;
 
-  // Salva posição do vídeo antes de trocar de tela
   salvarPosicaoVideo();
   destruirPlayer();
 
