@@ -1,6 +1,5 @@
 /* =========================================================================
-   ENEM Play — app.js
-   (login + sessão única + temporadas + materiais + player + thumbnails)
+   ENEM Play — app.js (correção de áudio)
    ========================================================================= */
 
 const $app = document.getElementById('app');
@@ -36,7 +35,6 @@ try {
 let progresso = {};
 let ultimo    = {};
 let videoPos  = {};
-let ultimoCursoId = null;
 let atual     = { cursoId: null, tIdx: 0, aIdx: 0 };
 
 let sessionId = null, sessionUnsub = null, isBlocked = false;
@@ -163,16 +161,15 @@ async function carregarProgressoUsuario(){
     const snap = await db.collection('progresso').doc(currentUser.uid).get();
     if (snap.exists){
       const d = snap.data() || {};
-      progresso     = d.cursos        || {};
-      ultimo        = d.ultimo        || {};
-      videoPos      = d.posicoes      || {};
-      ultimoCursoId = d.ultimoCursoId || null;
+      progresso = d.cursos    || {};
+      ultimo    = d.ultimo    || {};
+      videoPos  = d.posicoes  || {};
     } else {
-      progresso = {}; ultimo = {}; videoPos = {}; ultimoCursoId = null;
+      progresso = {}; ultimo = {}; videoPos = {};
     }
   } catch (e){
     console.warn('Erro ao carregar progresso:', e);
-    progresso = {}; ultimo = {}; videoPos = {}; ultimoCursoId = null;
+    progresso = {}; ultimo = {}; videoPos = {};
   }
 }
 
@@ -186,7 +183,6 @@ function salvarProgresso(imediato = false){
         cursos: progresso,
         ultimo: ultimo,
         posicoes: videoPos,
-        ultimoCursoId: ultimoCursoId,
         atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
     } catch (e){ console.warn('Erro salvar:', e); }
@@ -199,55 +195,6 @@ function posicaoSalva(cursoId, tIdx, aIdx){
   const ch = chaveAula(tIdx, aIdx);
   return (videoPos[cursoId] && videoPos[cursoId][ch]) || null;
 }
-function limparPosicaoVideo(cursoId, tIdx, aIdx){
-  if (videoPos[cursoId]) delete videoPos[cursoId][chaveAula(tIdx, aIdx)];
-}
-
-/* Thumbnail da aula */
-function thumbDaAula(cursoId, tIdx, aIdx){
-  const pos = posicaoSalva(cursoId, tIdx, aIdx);
-  if (pos && pos.thumb) return pos.thumb;
-
-  const curso = cursoPorId(cursoId);
-  if (!curso) return null;
-  const aula = curso.temporadas[tIdx]?.aulas[aIdx];
-  if (aula && aula.thumb) return aula.thumb;
-  if (curso.thumb) return curso.thumb;
-  return null;
-}
-
-/* Captura um frame do vídeo como JPEG (retorna null se falhar) */
-function capturarThumbnail(video){
-  try {
-    if (!video) return null;
-    if (video.readyState < 2) return null;  // precisa ter dados carregados
-    if (!video.videoWidth || !video.videoHeight) return null;
-    if (video.currentTime < 1) return null; // evita frame preto inicial
-
-    const w = 320;
-    const h = Math.round((video.videoHeight / video.videoWidth) * 320) || 180;
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-
-    ctx.drawImage(video, 0, 0, w, h);
-
-    // Verifica se o canvas ficou "tainted"
-    try {
-      return canvas.toDataURL('image/jpeg', 0.55);
-    } catch (secErr) {
-      console.warn('[thumb] Canvas bloqueado por CORS — usando fallback.');
-      return null;
-    }
-  } catch (e){
-    console.warn('[thumb] Erro na captura:', e);
-    return null;
-  }
-}
-
-/* Salva apenas a posição (leve, chamado com frequência) */
 function salvarPosicaoVideo(){
   if (!currentUser || !currentVideo) return;
   const { cursoId, tIdx, aIdx } = atual;
@@ -256,55 +203,13 @@ function salvarPosicaoVideo(){
   if (!isFinite(t) || !isFinite(d) || d <= 0) return;
 
   const tSalvar = (t >= d - 10) ? 0 : t;
-  const ch = chaveAula(tIdx, aIdx);
 
   if (!videoPos[cursoId]) videoPos[cursoId] = {};
-  const entrada = videoPos[cursoId][ch] || {};
-  entrada.t = tSalvar;
-  entrada.d = d;
-  videoPos[cursoId][ch] = entrada;
-
+  videoPos[cursoId][chaveAula(tIdx, aIdx)] = { t: tSalvar, d };
   salvarProgresso();
 }
-
-/* Tenta capturar a thumbnail — SÓ deve ser chamado quando o vídeo está pausado.
-   Não interfere no playback. */
-function tentarCapturarThumb(){
-  if (!currentUser || !currentVideo) return;
-
-  // Vídeo precisa estar pausado (evita conflito com decodificação HLS)
-  if (!currentVideo.paused) return;
-
-  const { cursoId, tIdx, aIdx } = atual;
-  const ch = chaveAula(tIdx, aIdx);
-  const entrada = (videoPos[cursoId] && videoPos[cursoId][ch]) || {};
-
-  // Se já tem thumb nesta aula, não faz nada
-  if (entrada.thumb) return;
-
-  // Só captura se já rolou um tempo razoável
-  if (!entrada.t || entrada.t < 3) return;
-
-  const thumb = capturarThumbnail(currentVideo);
-  if (!thumb) return;
-
-  // Guarda apenas UMA thumb por usuário (a do último vídeo assistido)
-  Object.keys(videoPos).forEach(cid => {
-    if (!videoPos[cid]) return;
-    Object.keys(videoPos[cid]).forEach(k => {
-      if (k === ch && cid === cursoId) return;
-      if (videoPos[cid][k] && videoPos[cid][k].thumb) {
-        delete videoPos[cid][k].thumb;
-      }
-    });
-  });
-
-  entrada.thumb = thumb;
-  entrada.t = entrada.t || currentVideo.currentTime;
-  entrada.d = entrada.d || currentVideo.duration;
-  videoPos[cursoId][ch] = entrada;
-
-  salvarProgresso(true);
+function limparPosicaoVideo(cursoId, tIdx, aIdx){
+  if (videoPos[cursoId]) delete videoPos[cursoId][chaveAula(tIdx, aIdx)];
 }
 
 /* =========================================================================
@@ -384,7 +289,7 @@ if (auth){
       rotear();
     } else {
       currentUser = null;
-      progresso = {}; ultimo = {}; videoPos = {}; ultimoCursoId = null;
+      progresso = {}; ultimo = {}; videoPos = {};
       isBlocked = false;
       encerrarSessaoListener();
       fecharBloqueio();
@@ -460,6 +365,8 @@ function playerHtml(aula){
   }
 
   if (emb.tipo === 'hls' || emb.tipo === 'video'){
+    /* IMPORTANTE: SEM crossorigin="anonymous" — o hls.js cuida do CORS
+       e o atributo quebra o áudio em CDNs que não retornam os headers. */
     return `
       <video id="video-el" playsinline preload="metadata"></video>
 
@@ -548,6 +455,7 @@ function iniciarPlayer(aula){
 
   currentVideo = video;
 
+  /* ---- Garantir que o vídeo não inicia mudo ---- */
   video.muted = false;
   video.defaultMuted = false;
   video.removeAttribute('muted');
@@ -555,8 +463,10 @@ function iniciarPlayer(aula){
   const { cursoId, tIdx, aIdx } = atual;
   const emb = embedDoLink(link);
 
+  /* ---- Configurar fonte ---- */
   if (emb.tipo === 'hls'){
     if (video.canPlayType('application/vnd.apple.mpegurl')){
+      // Safari / iOS — HLS nativo
       video.src = link;
     } else {
       carregarHlsLib().then(Hls => {
@@ -571,6 +481,7 @@ function iniciarPlayer(aula){
         hlsInstance.attachMedia(video);
 
         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+          // Se houver múltiplas faixas de áudio, seleciona a primeira
           if (hlsInstance.audioTracks && hlsInstance.audioTracks.length > 0){
             hlsInstance.audioTrack = 0;
           }
@@ -593,11 +504,13 @@ function iniciarPlayer(aula){
     video.src = link;
   }
 
+  /* ---- Volume inicial ---- */
   let volSalvo = Number(localStorage.getItem('enemplay:volume'));
   if (!isFinite(volSalvo) || volSalvo <= 0) volSalvo = 1;
   video.volume = volSalvo;
   video.muted = false;
 
+  /* ---- Restaurar posição ---- */
   video.addEventListener('loadedmetadata', () => {
     const pos = posicaoSalva(cursoId, tIdx, aIdx);
     if (pos && pos.t > 5 && video.duration && pos.t < video.duration - 5){
@@ -607,23 +520,17 @@ function iniciarPlayer(aula){
     atualizarTempo(video);
   }, { once: true });
 
+  /* ---- Eventos ---- */
   video.addEventListener('play', () => {
     wrap.classList.remove('pausado');
     sincronizarBotaoPlay(true);
   });
-
   video.addEventListener('pause', () => {
     wrap.classList.add('pausado');
     sincronizarBotaoPlay(false);
     salvarPosicaoVideo();
     salvarProgresso(true);
-    // Captura thumbnail APENAS quando o vídeo está pausado
-    // setTimeout garante que o frame já está estável
-    setTimeout(() => {
-      try { tentarCapturarThumb(); } catch (e) { console.warn(e); }
-    }, 350);
   });
-
   video.addEventListener('timeupdate', () => {
     atualizarBarra(video);
     const agora = Date.now();
@@ -637,9 +544,6 @@ function iniciarPlayer(aula){
     wrap.classList.add('pausado');
     sincronizarBotaoPlay(false);
     salvarPosicaoVideo();
-    setTimeout(() => {
-      try { tentarCapturarThumb(); } catch (e) { console.warn(e); }
-    }, 350);
   });
   video.addEventListener('volumechange', () => atualizarIconeVolume(video));
 
@@ -648,6 +552,7 @@ function iniciarPlayer(aula){
   if (video.paused) wrap.classList.add('pausado');
 }
 
+/* ---------- Controles ---------- */
 function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
   const pcWrap   = document.getElementById('pc-wrap');
   const btnPlay  = document.getElementById('pc-play');
@@ -672,6 +577,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
   video.addEventListener('click', togglePlay);
   video.addEventListener('dblclick', alternarFullscreen);
 
+  /* Volume */
   if (rangeVol){
     rangeVol.value = video.volume;
     rangeVol.addEventListener('input', () => {
@@ -691,6 +597,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     atualizarIconeVolume(video);
   });
 
+  /* Fullscreen */
   function alternarFullscreen(){
     if (!document.fullscreenElement && !document.webkitFullscreenElement){
       const el = wrap.closest('.player') || wrap;
@@ -703,6 +610,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
   }
   btnFull?.addEventListener('click', alternarFullscreen);
 
+  /* Barra */
   if (barra){
     const buscarPos = (clientX) => {
       const rect = barra.getBoundingClientRect();
@@ -744,6 +652,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     document.addEventListener('touchend', onUp);
   }
 
+  /* Menu de qualidade */
   qualBtn?.addEventListener('click', (e) => {
     e.stopPropagation();
     qualBox.classList.toggle('aberto');
@@ -760,6 +669,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     qualBox.classList.remove('aberto');
   });
 
+  /* Esconder controles */
   const mostrarControles = () => {
     wrap.classList.add('controles-visiveis');
     wrap.classList.remove('ocultar-cursor');
@@ -780,6 +690,7 @@ function setupControlesPlayer(wrap, video, cursoId, tIdx, aIdx){
     }
   });
 
+  /* Atalhos */
   const onKey = (e) => {
     if (!document.body.contains(wrap)) return;
     if (e.target.matches('input, textarea')) return;
@@ -969,49 +880,41 @@ function fileira(titulo, cursos){
     </section>`;
 }
 
-/* CARD "CONTINUAR ASSISTINDO" */
-function renderContinuarHero(info){
-  if (!info) return '';
-  const { curso, tIdx, aIdx, aula, pos, tempNome } = info;
-  const thumb = thumbDaAula(curso.id, tIdx, aIdx);
-
-  const t = (pos && pos.t) || 0;
-  const d = (pos && pos.d) || 0;
-  const pct = d > 0 ? Math.min(100, (t / d) * 100) : 0;
-
-  const bgStyle = thumb
-    ? `background-image:url('${thumb}')`
-    : `background: radial-gradient(circle at 70% 40%, ${curso.cor} 0%, transparent 65%), linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%)`;
-
-  const tempoAtual = d > 0 ? formatarTempo(t) : '0:00';
-  const tempoTotal = d > 0 ? formatarTempo(d) : (aula.duracao || '');
-
+function abasTemporadas(curso, tAtiva, baseUrl){
   return `
-    <div class="continuar-hero anim" style="--cor:${curso.cor}"
-         data-href="#/assistir/${curso.id}/${tIdx}/${aIdx}">
-      <div class="continuar-hero__bg" style="${bgStyle}"></div>
-      <span class="continuar-hero__emoji">${curso.icone}</span>
-      <div class="continuar-hero__conteudo">
-        <span class="continuar-hero__tag">Continuar assistindo</span>
-        <div class="continuar-hero__meta">
-          <span>${esc(curso.nome)}</span>
-          <span class="pt"></span>
-          <span>${esc(tempNome)}</span>
-        </div>
-        <h2 class="continuar-hero__titulo">${esc(aula.titulo)}</h2>
-        ${d > 0 ? `
-          <div class="continuar-hero__barra"><span style="width:${pct}%"></span></div>
-          <div class="continuar-hero__tempo">
-            <b>${tempoAtual}</b> de ${tempoTotal}
-          </div>
-        ` : ''}
-        <div class="continuar-hero__acoes">
-          <span class="btn-n btn-n--claro">${ICONE_PLAY} Retomar</span>
-          <a class="btn-n btn-n--escuro" href="#/curso/${curso.id}/${tIdx}">
-            Ver todas as aulas
-          </a>
-        </div>
-      </div>
+    <div class="temp-tabs" role="tablist">
+      ${curso.temporadas.map((t, i) => `
+        <a class="temp-tab ${i === tAtiva ? 'is-ativa' : ''}" href="${baseUrl}/${i}" role="tab">
+          <span class="temp-tab__nome">${esc(t.nome)}</span>
+          <span class="temp-tab__qtd">${t.aulas.length} aulas</span>
+        </a>`).join('')}
+    </div>`;
+}
+
+function listaEpisodios(curso, tIdx){
+  const temp = curso.temporadas[tIdx];
+  if (!temp) return '';
+  return `
+    <div class="lista-eps">
+      ${temp.aulas.map((a, i) => {
+        const done = isFeita(curso.id, tIdx, i);
+        const temMat = Array.isArray(a.materiais) && a.materiais.length;
+        const pos = posicaoSalva(curso.id, tIdx, i);
+        const emAndamento = pos && pos.t > 5 && pos.d && pos.t < pos.d - 5;
+        return `
+          <a class="ep ${done?'is-feito':''}" href="#/assistir/${curso.id}/${tIdx}/${i}">
+            <span class="ep__num">${i + 1}</span>
+            <div class="ep__info">
+              <h3>${esc(a.titulo)} ${done ? `<span class="selo">vista</span>` : ''}</h3>
+              <p>
+                ${esc(a.duracao || 'Aula em vídeo')}
+                ${temMat ? ` · 📎 ${a.materiais.length} material(is)` : ''}
+                ${emAndamento ? ` · ⏱ retomar em ${formatarTempo(pos.t)}` : ''}
+              </p>
+            </div>
+            <span class="ep__play">${ICONE_PLAY}</span>
+          </a>`;
+      }).join('')}
     </div>`;
 }
 
@@ -1024,22 +927,9 @@ function viewHome(){
   const [uT, uA] = (ultimo[destaque.id] || "0_0").split('_').map(Number);
   const idxInicial = `#/assistir/${destaque.id}/${uT||0}/${uA||0}`;
 
-  let continuar = null;
-  const cid = ultimoCursoId || Object.keys(ultimo).pop();
-  if (cid){
-    const curso = cursoPorId(cid);
-    if (curso){
-      const [tIdx, aIdx] = (ultimo[cid] || "0_0").split('_').map(Number);
-      const temp = curso.temporadas[tIdx] || curso.temporadas[0];
-      const aula = temp?.aulas[aIdx] || temp?.aulas[0];
-      if (aula){
-        const pos = posicaoSalva(cid, tIdx, aIdx);
-        if (pos && pos.t > 5){
-          continuar = { curso, tIdx, aIdx, aula, pos, tempNome: temp.nome };
-        }
-      }
-    }
-  }
+  let continuarCurso = null;
+  const ids = Object.keys(ultimo).filter(id => cursoPorId(id));
+  if (ids.length) continuarCurso = cursoPorId(ids[ids.length - 1]);
 
   const porCategoria = {
     exatas:     CURSOS.filter(c => c.categoria === 'exatas'),
@@ -1071,7 +961,7 @@ function viewHome(){
   </section>
 
   <div style="position:relative; z-index:2; margin-top:-3rem;">
-    ${renderContinuarHero(continuar)}
+    ${continuarCurso ? fileira("Continuar assistindo · " + esc(continuarCurso.nome), [continuarCurso, ...emAlta.filter(c=>c.id!==continuarCurso.id)].slice(0,7)) : ''}
     ${fileira("Em alta no ENEM Play", emAlta)}
     ${fileira(CATEGORIAS.exatas.nome, porCategoria.exatas)}
     ${fileira(CATEGORIAS.humanas.nome, porCategoria.humanas)}
@@ -1153,44 +1043,6 @@ function viewCurso(cursoId, tParam){
   </div>`;
 }
 
-function abasTemporadas(curso, tAtiva, baseUrl){
-  return `
-    <div class="temp-tabs" role="tablist">
-      ${curso.temporadas.map((t, i) => `
-        <a class="temp-tab ${i === tAtiva ? 'is-ativa' : ''}" href="${baseUrl}/${i}" role="tab">
-          <span class="temp-tab__nome">${esc(t.nome)}</span>
-          <span class="temp-tab__qtd">${t.aulas.length} aulas</span>
-        </a>`).join('')}
-    </div>`;
-}
-
-function listaEpisodios(curso, tIdx){
-  const temp = curso.temporadas[tIdx];
-  if (!temp) return '';
-  return `
-    <div class="lista-eps">
-      ${temp.aulas.map((a, i) => {
-        const done = isFeita(curso.id, tIdx, i);
-        const temMat = Array.isArray(a.materiais) && a.materiais.length;
-        const pos = posicaoSalva(curso.id, tIdx, i);
-        const emAndamento = pos && pos.t > 5 && pos.d && pos.t < pos.d - 5;
-        return `
-          <a class="ep ${done?'is-feito':''}" href="#/assistir/${curso.id}/${tIdx}/${i}">
-            <span class="ep__num">${i + 1}</span>
-            <div class="ep__info">
-              <h3>${esc(a.titulo)} ${done ? `<span class="selo">vista</span>` : ''}</h3>
-              <p>
-                ${esc(a.duracao || 'Aula em vídeo')}
-                ${temMat ? ` · 📎 ${a.materiais.length} material(is)` : ''}
-                ${emAndamento ? ` · ⏱ retomar em ${formatarTempo(pos.t)}` : ''}
-              </p>
-            </div>
-            <span class="ep__play">${ICONE_PLAY}</span>
-          </a>`;
-      }).join('')}
-    </div>`;
-}
-
 function viewAssistir(cursoId, tParam, aParam){
   const curso = cursoPorId(cursoId);
   if (!curso) return view404();
@@ -1204,7 +1056,6 @@ function viewAssistir(cursoId, tParam, aParam){
 
   atual = { cursoId, tIdx, aIdx };
   ultimo[cursoId] = chaveAula(tIdx, aIdx);
-  ultimoCursoId = cursoId;
   salvarProgresso();
 
   const aula  = temporada.aulas[aIdx];
@@ -1500,13 +1351,6 @@ document.addEventListener('click', (e) => {
   if (acao === 'concluir') alternarConclusao();
   if (acao === 'proxima')  irParaAula(1);
   if (acao === 'anterior') irParaAula(-1);
-});
-
-document.addEventListener('click', (e) => {
-  const card = e.target.closest('[data-href]');
-  if (!card) return;
-  if (e.target.closest('a, button')) return;
-  location.hash = card.dataset.href;
 });
 
 document.getElementById('form-busca').addEventListener('submit', (e) => {
