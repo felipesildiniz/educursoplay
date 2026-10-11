@@ -34,9 +34,9 @@ try {
    ESTADO
    ========================================================================= */
 let progresso = {};
-let ultimo    = {};              // { cursoId: "t_a" }
-let videoPos  = {};              // { cursoId: { "t_a": { t, d, thumb } } }
-let ultimoCursoId = null;        // curso mais recentemente assistido
+let ultimo    = {};
+let videoPos  = {};
+let ultimoCursoId = null;
 let atual     = { cursoId: null, tIdx: 0, aIdx: 0 };
 
 let sessionId = null, sessionUnsub = null, isBlocked = false;
@@ -45,7 +45,6 @@ let hlsInstance = null;
 let currentVideo = null;
 let hideControlsTimer = null;
 let ultimoSalvamentoVideo = 0;
-let ultimaCapturaThumb = 0;
 
 /* =========================================================================
    UTILS
@@ -196,7 +195,6 @@ function salvarProgresso(imediato = false){
   else saveTimer = setTimeout(doSave, 800);
 }
 
-/* Posição do vídeo */
 function posicaoSalva(cursoId, tIdx, aIdx){
   const ch = chaveAula(tIdx, aIdx);
   return (videoPos[cursoId] && videoPos[cursoId][ch]) || null;
@@ -207,42 +205,49 @@ function limparPosicaoVideo(cursoId, tIdx, aIdx){
 
 /* Thumbnail da aula */
 function thumbDaAula(cursoId, tIdx, aIdx){
-  // 1) Thumbnail capturada automaticamente (frame real do vídeo)
   const pos = posicaoSalva(cursoId, tIdx, aIdx);
   if (pos && pos.thumb) return pos.thumb;
 
-  // 2) Thumbnail manual definida na aula
   const curso = cursoPorId(cursoId);
   if (!curso) return null;
   const aula = curso.temporadas[tIdx]?.aulas[aIdx];
   if (aula && aula.thumb) return aula.thumb;
-
-  // 3) Thumbnail manual do curso (fallback)
   if (curso.thumb) return curso.thumb;
-
   return null;
 }
 
 /* Captura um frame do vídeo como JPEG (retorna null se falhar) */
 function capturarThumbnail(video){
   try {
-    if (!video || !video.videoWidth || !video.videoHeight) return null;
-    if (video.readyState < 2) return null;
+    if (!video) return null;
+    if (video.readyState < 2) return null;  // precisa ter dados carregados
+    if (!video.videoWidth || !video.videoHeight) return null;
+    if (video.currentTime < 1) return null; // evita frame preto inicial
 
-    const w = 400;
-    const h = Math.round((video.videoHeight / video.videoWidth) * 400) || 225;
+    const w = 320;
+    const h = Math.round((video.videoHeight / video.videoWidth) * 320) || 180;
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
     ctx.drawImage(video, 0, 0, w, h);
-    return canvas.toDataURL('image/jpeg', 0.65);
+
+    // Verifica se o canvas ficou "tainted"
+    try {
+      return canvas.toDataURL('image/jpeg', 0.55);
+    } catch (secErr) {
+      console.warn('[thumb] Canvas bloqueado por CORS — usando fallback.');
+      return null;
+    }
   } catch (e){
-    // Canvas "tainted" (Safari com HLS nativo, MP4 cross-origin sem CORS…)
+    console.warn('[thumb] Erro na captura:', e);
     return null;
   }
 }
 
+/* Salva apenas a posição (leve, chamado com frequência) */
 function salvarPosicaoVideo(){
   if (!currentUser || !currentVideo) return;
   const { cursoId, tIdx, aIdx } = atual;
@@ -257,27 +262,49 @@ function salvarPosicaoVideo(){
   const entrada = videoPos[cursoId][ch] || {};
   entrada.t = tSalvar;
   entrada.d = d;
-
-  // Captura thumbnail (no máx. uma vez a cada 25s), só em frames "bons"
-  const agora = Date.now();
-  if (t > 5 && t < d - 5 && agora - ultimaCapturaThumb > 25000){
-    const thumb = capturarThumbnail(currentVideo);
-    if (thumb){
-      entrada.thumb = thumb;
-      ultimaCapturaThumb = agora;
-    }
-  }
-
   videoPos[cursoId][ch] = entrada;
 
-  // Mantém apenas 1 thumbnail por curso (a do último assistido)
-  for (const k in videoPos[cursoId]){
-    if (k !== ch && videoPos[cursoId][k] && videoPos[cursoId][k].thumb){
-      delete videoPos[cursoId][k].thumb;
-    }
-  }
-
   salvarProgresso();
+}
+
+/* Tenta capturar a thumbnail — SÓ deve ser chamado quando o vídeo está pausado.
+   Não interfere no playback. */
+function tentarCapturarThumb(){
+  if (!currentUser || !currentVideo) return;
+
+  // Vídeo precisa estar pausado (evita conflito com decodificação HLS)
+  if (!currentVideo.paused) return;
+
+  const { cursoId, tIdx, aIdx } = atual;
+  const ch = chaveAula(tIdx, aIdx);
+  const entrada = (videoPos[cursoId] && videoPos[cursoId][ch]) || {};
+
+  // Se já tem thumb nesta aula, não faz nada
+  if (entrada.thumb) return;
+
+  // Só captura se já rolou um tempo razoável
+  if (!entrada.t || entrada.t < 3) return;
+
+  const thumb = capturarThumbnail(currentVideo);
+  if (!thumb) return;
+
+  // Guarda apenas UMA thumb por usuário (a do último vídeo assistido)
+  Object.keys(videoPos).forEach(cid => {
+    if (!videoPos[cid]) return;
+    Object.keys(videoPos[cid]).forEach(k => {
+      if (k === ch && cid === cursoId) return;
+      if (videoPos[cid][k] && videoPos[cid][k].thumb) {
+        delete videoPos[cid][k].thumb;
+      }
+    });
+  });
+
+  entrada.thumb = thumb;
+  entrada.t = entrada.t || currentVideo.currentTime;
+  entrada.d = entrada.d || currentVideo.duration;
+  videoPos[cursoId][ch] = entrada;
+
+  salvarProgresso(true);
 }
 
 /* =========================================================================
@@ -584,12 +611,19 @@ function iniciarPlayer(aula){
     wrap.classList.remove('pausado');
     sincronizarBotaoPlay(true);
   });
+
   video.addEventListener('pause', () => {
     wrap.classList.add('pausado');
     sincronizarBotaoPlay(false);
     salvarPosicaoVideo();
     salvarProgresso(true);
+    // Captura thumbnail APENAS quando o vídeo está pausado
+    // setTimeout garante que o frame já está estável
+    setTimeout(() => {
+      try { tentarCapturarThumb(); } catch (e) { console.warn(e); }
+    }, 350);
   });
+
   video.addEventListener('timeupdate', () => {
     atualizarBarra(video);
     const agora = Date.now();
@@ -603,6 +637,9 @@ function iniciarPlayer(aula){
     wrap.classList.add('pausado');
     sincronizarBotaoPlay(false);
     salvarPosicaoVideo();
+    setTimeout(() => {
+      try { tentarCapturarThumb(); } catch (e) { console.warn(e); }
+    }, 350);
   });
   video.addEventListener('volumechange', () => atualizarIconeVolume(video));
 
@@ -987,7 +1024,6 @@ function viewHome(){
   const [uT, uA] = (ultimo[destaque.id] || "0_0").split('_').map(Number);
   const idxInicial = `#/assistir/${destaque.id}/${uT||0}/${uA||0}`;
 
-  /* --- Continuar assistindo --- */
   let continuar = null;
   const cid = ultimoCursoId || Object.keys(ultimo).pop();
   if (cid){
@@ -998,7 +1034,6 @@ function viewHome(){
       const aula = temp?.aulas[aIdx] || temp?.aulas[0];
       if (aula){
         const pos = posicaoSalva(cid, tIdx, aIdx);
-        // Só mostra o card se o aluno realmente começou a assistir
         if (pos && pos.t > 5){
           continuar = { curso, tIdx, aIdx, aula, pos, tempNome: temp.nome };
         }
@@ -1458,7 +1493,6 @@ function atualizarHeader(){
 }
 window.addEventListener('scroll', atualizarHeader, { passive: true });
 
-/* Ação padrão dos botões [data-acao] */
 document.addEventListener('click', (e) => {
   const alvo = e.target.closest('[data-acao]');
   if (!alvo) return;
@@ -1468,11 +1502,9 @@ document.addEventListener('click', (e) => {
   if (acao === 'anterior') irParaAula(-1);
 });
 
-/* Card clicável (data-href) — usado no "Continuar assistindo" */
 document.addEventListener('click', (e) => {
   const card = e.target.closest('[data-href]');
   if (!card) return;
-  // Se o clique foi em link ou botão interno, deixa o comportamento normal
   if (e.target.closest('a, button')) return;
   location.hash = card.dataset.href;
 });
